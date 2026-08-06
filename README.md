@@ -32,11 +32,10 @@ https://chatbot-s9d3.onrender.com/
    pip install -r requirements.txt
    ```
 
-3. Copia `.env.example` a `.env` y agrega tu API key de Anthropic:
+3. Copia `.env.example` a `.env` y agrega tu API key de Groq:
    ```bash
    cp .env.example .env
    ```
-   Puedes obtener una key en [console.anthropic.com](https://console.anthropic.com/).
 
 4. Corre el servidor:
    ```bash

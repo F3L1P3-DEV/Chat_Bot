@@ -21,7 +21,7 @@ https://chatbot-s9d3.onrender.com/
 
 1. Clona el repositorio:
    ```bash
-   git clone [https://github.com/F3L1P3-DEV/Chat_Bot.git](https://github.com/F3L1P3-DEV/Chat_Bot.git)
+   git clone https://github.com/F3L1P3-DEV/Chat_Bot.git(https://github.com/F3L1P3-DEV/Chat_Bot.git)
    cd Chat_Bot
    ```
 

@@ -89,43 +89,37 @@ def add_message(session_id: str, role: str, content: str):
         print(f"Error en add_message: {e}")
 
 
-def get_history(session_id: str, limit: int = 50):
-    """Devuelve el historial de una sesión para mandarlo a la API de Groq."""
-    try:
-        conn = get_connection()
-        cursor = conn.cursor(cursor_factory=RealDictCursor)
+def get_history(session_id):
+    """Obtiene el historial de conversaciones para la sesión actual."""
+    conn = get_connection()
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    
+    # CAMBIO: Usar 'messages' en lugar de 'history'
+    cursor.execute("""
+        SELECT role, content
+        FROM messages
+        WHERE session_id = %s
+        ORDER BY id ASC;
+    """, (session_id,))
 
-        cursor.execute("""
-            SELECT role, content FROM (
-                SELECT role, content, id
-                FROM messages
-                WHERE session_id = %s
-                ORDER BY id DESC
-                LIMIT %s
-            ) AS sub
-            ORDER BY id ASC;
-        """, (session_id, limit))
+    rows = cursor.fetchall()
+    cursor.close()
+    conn.close()
 
-        rows = cursor.fetchall()
-        cursor.close()
-        conn.close()
-
-        return [{"role": row["role"], "content": row["content"]} for row in rows]
-    except Exception as e:
-        print(f"Error en get_history: {e}")
-        return []
+    return [{"role": row["role"], "content": row["content"]} for row in rows]
 
 
-def clear_history(session_id: str):
-    """Borra todos los mensajes de una sesión."""
-    try:
-        conn = get_connection()
-        cursor = conn.cursor()
+def clear_history(session_id):
+    """Elimina el historial de mensajes de la sesión activa."""
+    conn = get_connection()
+    cursor = conn.cursor()
 
-        cursor.execute("DELETE FROM messages WHERE session_id = %s;", (session_id,))
+    # CAMBIO: Usar 'messages' en lugar de 'history'
+    cursor.execute("""
+        DELETE FROM messages
+        WHERE session_id = %s;
+    """, (session_id,))
 
-        conn.commit()
-        cursor.close()
-        conn.close()
-    except Exception as e:
-        print(f"Error en clear_history: {e}")
+    conn.commit()
+    cursor.close()
+    conn.close()

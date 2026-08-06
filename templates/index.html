@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Asistente de Estudio para Devs</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+</head>
+<body>
+
+  <div class="chat-container">
+    <header class="chat-header">
+      <h1>💻 Asistente de Estudio</h1>
+      <button id="reset-btn" title="Nueva conversación">🔄</button>
+    </header>
+
+    <div id="chat-window" class="chat-window">
+      <div class="message bot">
+        ¡Hola! Soy tu asistente de estudio. Pregúntame sobre programación,
+        desarrollo web, Python, AWS o cualquier duda técnica que tengas. 🚀
+      </div>
+    </div>
+
+    <div class="chat-input-area">
+      <input
+        type="text"
+        id="user-input"
+        placeholder="Escribe tu pregunta..."
+        autocomplete="off"
+      />
+      <button id="send-btn">Enviar</button>
+    </div>
+  </div>
+
+  <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>

@@ -22,7 +22,7 @@ https://chatbot-s9d3.onrender.com/
 1. Clona el repositorio:
    ```bash
    git clone https://github.com/F3L1P3-DEV/Chat_Bot.git
-   cd dev-assistant-Chat_Bot
+   cd Chat_Bot
    ```
 
 2. Crea un entorno virtual e instala las dependencias:

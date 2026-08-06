@@ -5,7 +5,7 @@ Python, AWS y buenas prácticas — pensado como herramienta de estudio
 para desarrolladores junior.
 
 Construido con **Flask** (backend) y **HTML/CSS/JavaScript puro** (frontend),
-usando la API de **Claude (Anthropic)** para generar las respuestas.
+usando la API de **Groq** para generar las respuestas.
 
 ## 🚀 Demo
 
@@ -15,7 +15,7 @@ https://chatbot-s9d3.onrender.com/
 
 - Python + Flask
 - HTML / CSS / JavaScript
-- API de Anthropic (Claude)
+- API de Groq
 
 ## ⚙️ Cómo correrlo localmente
 

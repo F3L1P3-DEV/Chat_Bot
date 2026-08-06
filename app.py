@@ -34,7 +34,10 @@ SYSTEM_PROMPT = (
     "Responde siempre en español, de forma concisa pero completa."
 )
 
+
 def get_session_id():
+    """Obtiene el session_id de la cookie de Flask, o crea uno nuevo."""
+    session.permanent = True  # Mantiene la cookie activa al recargar la página
     if "session_id" not in session:
         session["session_id"] = str(uuid.uuid4())
     sid = session["session_id"]
@@ -103,6 +106,7 @@ def chat():
 
 @app.route("/reset", methods=["POST"])
 def reset():
+    """Limpia el historial de la sesión activa."""
     sid = get_session_id()
     db.clear_history(sid)
     return jsonify({"status": "ok"})

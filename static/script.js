@@ -95,13 +95,20 @@ async function sendMessage() {
   }
 }
 
+// Carga el historial tan pronto como el DOM esté listo
+document.addEventListener("DOMContentLoaded", () => {
+  loadHistory();
+});
+
 async function loadHistory() {
   try {
     const response = await fetch("/history");
     const data = await response.json();
 
+    console.log("Historial recibido desde el servidor:", data);
+
     if (data.messages && data.messages.length > 0) {
-      chatWindow.innerHTML = ""; // quita el saludo inicial estático
+      chatWindow.innerHTML = ""; // Limpia el saludo estático
       data.messages.forEach((m) => {
         addMessage(m.content, m.role === "user" ? "user" : "bot");
       });
@@ -111,8 +118,7 @@ async function loadHistory() {
   }
 }
 
-loadHistory();
-
+// Escuchadores de eventos para enviar mensaje y resetear
 sendBtn.addEventListener("click", sendMessage);
 
 userInput.addEventListener("keydown", (e) => {

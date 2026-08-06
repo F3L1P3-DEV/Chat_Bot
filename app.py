@@ -7,13 +7,22 @@ una respuesta usando un modelo de código abierto (Llama 3.3).
 """
 
 import os
-from flask import Flask, request, jsonify, render_template
+import uuid
+from flask import Flask, request, jsonify, render_template, Response, stream_with_context, session
 from groq import Groq
 from dotenv import load_dotenv
+
+import db
 
 load_dotenv()  # Carga variables desde el archivo .env
 
 app = Flask(__name__)
+
+# Necesaria para firmar la cookie de sesión (identifica a cada visitante).
+# En producción, ponla en el .env como SECRET_KEY y NO uses el valor por defecto.
+app.secret_key = os.environ.get("SECRET_KEY", "cambia-esto-en-produccion")
+
+db.init_db()
 
 # Cliente de Groq (lee la API key desde la variable de entorno GROQ_API_KEY)
 client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
@@ -28,53 +37,90 @@ SYSTEM_PROMPT = (
     "Responde siempre en español, de forma concisa pero completa."
 )
 
-# Guardamos el historial de conversación en memoria (simple, por sesión de servidor)
-conversation_history = []
+def get_session_id():
+    """Obtiene el session_id de la cookie de Flask, o crea uno nuevo
+    si es la primera visita. Así cada visitante tiene su propio historial."""
+    if "session_id" not in session:
+        session["session_id"] = str(uuid.uuid4())
+    sid = session["session_id"]
+    db.ensure_session(sid)
+    return sid
 
 
 @app.route("/")
 def home():
     """Sirve la página principal del chat."""
+    get_session_id()  # asegura que exista la cookie desde la primera carga
     return render_template("index.html")
+
+
+@app.route("/history", methods=["GET"])
+def history():
+    """Devuelve el historial guardado de esta sesión (para repintar el
+    chat si el usuario recarga la página)."""
+    sid = get_session_id()
+    return jsonify({"messages": db.get_history(sid)})
 
 
 @app.route("/chat", methods=["POST"])
 def chat():
-    """Recibe un mensaje del usuario y devuelve la respuesta de Claude."""
+    """Recibe un mensaje del usuario y transmite (streaming) la respuesta de Groq."""
+    sid = get_session_id()
     data = request.get_json()
     user_message = data.get("message", "").strip()
 
     if not user_message:
         return jsonify({"error": "Mensaje vacío"}), 400
 
-    # Agrega el mensaje del usuario al historial
-    conversation_history.append({"role": "user", "content": user_message})
+    # Guarda el mensaje del usuario en la base de datos
+    db.add_message(sid, "user", user_message)
 
-    try:
-        messages = [{"role": "system", "content": SYSTEM_PROMPT}] + conversation_history
+    def generate():
+        full_reply = ""
+        try:
+            chat_history = db.get_history(sid)
+            messages = [{"role": "system", "content": SYSTEM_PROMPT}] + chat_history
 
-        response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            max_tokens=1024,
-            messages=messages,
-        )
-        assistant_reply = response.choices[0].message.content
+            stream = client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                max_tokens=1024,
+                messages=messages,
+                stream=True,
+            )
 
-        # Agrega la respuesta al historial para mantener el contexto
-        conversation_history.append({"role": "assistant", "content": assistant_reply})
+            for chunk in stream:
+                content = chunk.choices[0].delta.content
+                if content:
+                    full_reply += content
+                    # Cada línea "data: ..." es un evento SSE. \n dentro del
+                    # texto se escapan para no romper el formato del protocolo.
+                    safe_content = content.replace("\n", "\\n")
+                    yield f"data: {safe_content}\n\n"
 
-        return jsonify({"reply": assistant_reply})
+            # Guarda la respuesta completa en la base de datos una vez terminó
+            db.add_message(sid, "assistant", full_reply)
+            yield "event: done\ndata: end\n\n"
 
-    except Exception as e:
-        return jsonify({"error": f"Error al contactar la API: {str(e)}"}), 500
+        except Exception as e:
+            yield f"event: error\ndata: {str(e)}\n\n"
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",  # evita que un proxy (ej. nginx) bufferee el stream
+        },
+    )
 
 
 @app.route("/reset", methods=["POST"])
 def reset():
     """Limpia el historial de conversación (botón 'Nueva conversación')."""
-    conversation_history.clear()
+    sid = get_session_id()
+    db.clear_history(sid)
     return jsonify({"status": "ok"})
 
 
 if __name__ == "__main__":
-    app.run(debug=True, port=5000)
+    app.run(debug=True, port=5000, threaded=True)

@@ -2,7 +2,7 @@
   box-sizing: border-box;
   margin: 0;
   padding: 0;
-  font-family: 'Segoe UI', system-ui, sans-serif;
+  font-family: 'Monaco', system-ui, sans-serif;
 }
 
 body {
@@ -14,7 +14,24 @@ body {
   justify-content: center;
 }
 
+body::before {
+  content: "";
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-image: url('/static/images/background.png');
+  background-size: cover;
+  background-position: center;
+  filter: blur(4px);
+  transform: scale(1.05);
+  z-index: -1;
+}
+
 .chat-container {
+  position: relative;
+  z-index: 1;
   width: 100%;
   max-width: 600px;
   height: 85vh;
@@ -24,7 +41,7 @@ body {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4);
+  box-shadow: 0 8px 30px rgb(131, 39, 39);
 }
 
 .chat-header {
@@ -38,7 +55,7 @@ body {
 
 .chat-header h1 {
   font-size: 18px;
-  color: #58a6ff;
+  color: #82b5e5;
 }
 
 #reset-btn {
@@ -79,6 +96,7 @@ body {
 }
 
 .message.bot {
+  text-align: justify;
   background: #21262d;
   color: #e6edf3;
   align-self: flex-start;
@@ -114,7 +132,7 @@ body {
 }
 
 #send-btn {
-  background: #238636;
+  background: #2a7e38;
   color: white;
   border: none;
   border-radius: 8px;

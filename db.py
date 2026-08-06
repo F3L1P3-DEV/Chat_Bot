@@ -1,8 +1,6 @@
 """
 Capa de base de datos (PostgreSQL / Supabase) para el historial de conversaciones.
 --------------------------------------------------------------------------------
-Cada visitante del chat tiene su propio session_id (guardado en una
-cookie de Flask), así que cada uno ve solo su propio historial.
 """
 
 import os
@@ -50,7 +48,7 @@ def init_db():
         conn.close()
         print("--- Base de datos PostgreSQL conectada e inicializada con éxito ---")
     except Exception as e:
-        print(f"--- Error al conectar con la base de datos: {e} ---")
+        print(f"--- Aviso de conexión a la BD: {e} ---")
 
 
 def ensure_session(session_id: str):
@@ -119,7 +117,7 @@ def get_history(session_id: str, limit: int = 50):
 
 
 def clear_history(session_id: str):
-    """Borra todos los mensajes de una sesión (botón 'Nueva conversación')."""
+    """Borra todos los mensajes de una sesión."""
     try:
         conn = get_connection()
         cursor = conn.cursor()

@@ -8,7 +8,7 @@ una respuesta usando un modelo de código abierto (Llama 3.3).
 
 import os
 import uuid
-from flask import Flask, request, jsonify, render_template, Response, stream_with_context, session
+from flask import Flask, request, jsonify, render_template, Response, stream_with_context, session, send_file, abort
 from groq import Groq
 from dotenv import load_dotenv
 
@@ -120,6 +120,28 @@ def reset():
     sid = get_session_id()
     db.clear_history(sid)
     return jsonify({"status": "ok"})
+
+
+@app.route("/admin/download-db", methods=["GET"])
+def download_db():
+    """
+    Descarga el archivo completo de la base de datos (chat_history.db).
+    Protegida con una clave secreta que va en la URL: ?key=TU_CLAVE
+
+    Configura ADMIN_KEY en las variables de entorno (local: .env,
+    en Render: dashboard > Environment). Si no la configuras, esta
+    ruta queda deshabilitada por seguridad.
+    """
+    admin_key = os.environ.get("ADMIN_KEY")
+
+    if not admin_key:
+        abort(404)  # ruta "no existe" si no configuraste una clave
+
+    provided_key = request.args.get("key", "")
+    if provided_key != admin_key:
+        abort(403)  # clave incorrecta o ausente
+
+    return send_file(db.DB_PATH, as_attachment=True, download_name="chat_history.db")
 
 
 if __name__ == "__main__":

@@ -11,7 +11,7 @@ usando la API de **Groq** para generar las respuestas.
 
 https://chatbot-s9d3.onrender.com/
 
-🛠️ Tecnologías Utilizadas
+## 🛠️ Tecnologías Utilizadas
 Motor de IA: Groq API (Llama 3 / Mixtral)
 
 Backend: Python, Flask, Gunicorn

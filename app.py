@@ -1,148 +1,111 @@
-"""
-Asistente de Estudio para Devs - Backend
------------------------------------------
-Servidor Flask que recibe mensajes del chat web y los envía
-a la API de Groq (gratuita, sin tarjeta de crédito) para obtener
-una respuesta usando un modelo de código abierto (Llama 3.3).
-"""
-
 import os
-import uuid
-from flask import Flask, request, jsonify, render_template, Response, stream_with_context, session, send_file, abort
-from groq import Groq
-from dotenv import load_dotenv
+import psycopg2
+from psycopg2.extras import RealDictCursor
 
-import db
+# Lee la URL de conexión desde la variable de entorno que pusiste en Render
+DATABASE_URL = os.environ.get("DATABASE_URL")
 
-load_dotenv()  # Carga variables desde el archivo .env
-
-app = Flask(__name__)
-
-# Necesaria para firmar la cookie de sesión (identifica a cada visitante).
-# En producción, ponla en el .env como SECRET_KEY y NO uses el valor por defecto.
-app.secret_key = os.environ.get("SECRET_KEY", "cambia-esto-en-produccion")
-
-db.init_db()
-
-# Cliente de Groq (lee la API key desde la variable de entorno GROQ_API_KEY)
-client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
-
-# Prompt de sistema: define la personalidad y el enfoque del asistente
-SYSTEM_PROMPT = (
-    "Eres un tutor de programación paciente y claro, especializado en ayudar "
-    "a estudiantes y desarrolladores junior a entender conceptos técnicos "
-    "(desarrollo web, Python, bases de datos, cloud/AWS, buenas prácticas). "
-    "Explica con ejemplos simples, usa bloques de código cuando ayude a "
-    "entender, y si el estudiante parece confundido, ofrece analogías. "
-    "Responde siempre en español, de forma concisa pero completa."
-)
-
-def get_session_id():
-    """Obtiene el session_id de la cookie de Flask, o crea uno nuevo
-    si es la primera visita. Así cada visitante tiene su propio historial."""
-    if "session_id" not in session:
-        session["session_id"] = str(uuid.uuid4())
-    sid = session["session_id"]
-    db.ensure_session(sid)
-    return sid
+def get_connection():
+    """Abre una conexión con la base de datos PostgreSQL en Supabase."""
+    if not DATABASE_URL:
+        raise ValueError("La variable de entorno DATABASE_URL no está configurada.")
+    return psycopg2.connect(DATABASE_URL, sslmode="require")
 
 
-@app.route("/")
-def home():
-    """Sirve la página principal del chat."""
-    get_session_id()  # asegura que exista la cookie desde la primera carga
-    return render_template("index.html")
+def init_db():
+    """Crea las tablas necesarias en PostgreSQL si no existen."""
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    # Tabla de sesiones
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS sessions (
+            session_id VARCHAR(255) PRIMARY KEY,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+    """)
+
+    # Tabla de mensajes de historial
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS history (
+            id SERIAL PRIMARY KEY,
+            session_id VARCHAR(255) REFERENCES sessions(session_id) ON DELETE CASCADE,
+            role VARCHAR(50) NOT NULL,
+            content TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+    """)
+
+    conn.commit()
+    cursor.close()
+    conn.close()
 
 
-@app.route("/history", methods=["GET"])
-def history():
-    """Devuelve el historial guardado de esta sesión (para repintar el
-    chat si el usuario recarga la página)."""
-    sid = get_session_id()
-    return jsonify({"messages": db.get_history(sid)})
+def ensure_session(session_id):
+    """Garantiza que la sesión exista en la tabla 'sessions'."""
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        INSERT INTO sessions (session_id)
+        VALUES (%s)
+        ON CONFLICT (session_id) DO NOTHING;
+    """, (session_id,))
+
+    conn.commit()
+    cursor.close()
+    conn.close()
 
 
-@app.route("/chat", methods=["POST"])
-def chat():
-    """Recibe un mensaje del usuario y transmite (streaming) la respuesta de Groq."""
-    sid = get_session_id()
-    data = request.get_json()
-    user_message = data.get("message", "").strip()
+def add_message(session_id, role, content):
+    """Guarda un nuevo mensaje en el historial."""
+    ensure_session(session_id)
 
-    if not user_message:
-        return jsonify({"error": "Mensaje vacío"}), 400
+    conn = get_connection()
+    cursor = conn.cursor()
 
-    # Guarda el mensaje del usuario en la base de datos
-    db.add_message(sid, "user", user_message)
+    cursor.execute("""
+        INSERT INTO history (session_id, role, content)
+        VALUES (%s, %s, %s);
+    """, (session_id, role, content))
 
-    def generate():
-        full_reply = ""
-        try:
-            chat_history = db.get_history(sid)
-            messages = [{"role": "system", "content": SYSTEM_PROMPT}] + chat_history
-
-            stream = client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
-                max_tokens=1024,
-                messages=messages,
-                stream=True,
-            )
-
-            for chunk in stream:
-                content = chunk.choices[0].delta.content
-                if content:
-                    full_reply += content
-                    # Cada línea "data: ..." es un evento SSE. \n dentro del
-                    # texto se escapan para no romper el formato del protocolo.
-                    safe_content = content.replace("\n", "\\n")
-                    yield f"data: {safe_content}\n\n"
-
-            # Guarda la respuesta completa en la base de datos una vez terminó
-            db.add_message(sid, "assistant", full_reply)
-            yield "event: done\ndata: end\n\n"
-
-        except Exception as e:
-            yield f"event: error\ndata: {str(e)}\n\n"
-
-    return Response(
-        stream_with_context(generate()),
-        mimetype="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",  # evita que un proxy (ej. nginx) bufferee el stream
-        },
-    )
+    conn.commit()
+    cursor.close()
+    conn.close()
 
 
-@app.route("/reset", methods=["POST"])
-def reset():
-    """Limpia el historial de conversación (botón 'Nueva conversación')."""
-    sid = get_session_id()
-    db.clear_history(sid)
-    return jsonify({"status": "ok"})
+def get_history(session_id):
+    """Obtiene el historial de conversaciones para la sesión actual."""
+    conn = get_connection()
+    # RealDictCursor devuelve los resultados como diccionarios {'role': ..., 'content': ...}
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+
+    cursor.execute("""
+        SELECT role, content
+        FROM history
+        WHERE session_id = %s
+        ORDER BY id ASC;
+    """, (session_id,))
+
+    rows = cursor.fetchall()
+
+    cursor.close()
+    conn.close()
+
+    # Convertimos los dicts a formato estándar de Python
+    return [{"role": row["role"], "content": row["content"]} for row in rows]
 
 
-@app.route("/admin/download-db", methods=["GET"])
-def download_db():
-    """
-    Descarga el archivo completo de la base de datos (chat_history.db).
-    Protegida con una clave secreta que va en la URL: ?key=TU_CLAVE
+def clear_history(session_id):
+    """Elimina el historial de mensajes de la sesión activa."""
+    conn = get_connection()
+    cursor = conn.cursor()
 
-    Configura ADMIN_KEY en las variables de entorno (local: .env,
-    en Render: dashboard > Environment). Si no la configuras, esta
-    ruta queda deshabilitada por seguridad.
-    """
-    admin_key = os.environ.get("ADMIN_KEY")
+    cursor.execute("""
+        DELETE FROM history
+        WHERE session_id = %s;
+    """, (session_id,))
 
-    if not admin_key:
-        abort(404)  # ruta "no existe" si no configuraste una clave
-
-    provided_key = request.args.get("key", "")
-    if provided_key != admin_key:
-        abort(403)  # clave incorrecta o ausente
-
-    return send_file(db.DB_PATH, as_attachment=True, download_name="chat_history.db")
-
-
-if __name__ == "__main__":
-    app.run(debug=True, port=5000, threaded=True)
+    conn.commit()
+    cursor.close()
+    conn.close()

@@ -11,11 +11,14 @@ usando la API de **Groq** para generar las respuestas.
 
 https://chatbot-s9d3.onrender.com/
 
-## 🛠️ Stack
+🛠️ Tecnologías Utilizadas
+Motor de IA: Groq API (Llama 3 / Mixtral)
 
-- Python + Flask
-- HTML / CSS / JavaScript
-- API de Groq
+Backend: Python, Flask, Gunicorn
+
+Frontend: HTML5, CSS3, JavaScript (Fetch API)
+
+Despliegue: Render
 
 ## ⚙️ Cómo correrlo localmente
 

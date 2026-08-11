@@ -29,7 +29,11 @@ db.init_db()
 
 # Clientes de Groq y Tavily
 client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
-tavily_client = TavilyClient(api_key=os.environ.get("TAVILY_API_KEY"))
+
+TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY")
+if not TAVILY_API_KEY:
+    print("--- Aviso: TAVILY_API_KEY no está configurada. La búsqueda web no funcionará. ---")
+tavily_client = TavilyClient(api_key=TAVILY_API_KEY) if TAVILY_API_KEY else None
 
 SYSTEM_PROMPT = (
     "Eres un tutor de programación paciente y claro, especializado en ayudar "
@@ -68,8 +72,13 @@ TOOLS = [
 
 def buscar_web(query):
     """Ejecuta la búsqueda real con Tavily."""
-    resultado = tavily_client.search(query=query, max_results=3)
-    return resultado
+    if not tavily_client:
+        return {"error": "La búsqueda web no está disponible en este momento."}
+    try:
+        resultado = tavily_client.search(query=query, max_results=3)
+        return resultado
+    except Exception as e:
+        return {"error": f"No se pudo completar la búsqueda: {e}"}
 
 
 def get_session_id():
@@ -108,11 +117,25 @@ def chat():
     def generate():
         full_reply = ""
         try:
-            fecha_actual = datetime.now().strftime("%d de %B de %Y")
+            DIAS_ES = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
+            MESES_ES = [
+                "enero", "febrero", "marzo", "abril", "mayo", "junio",
+                "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre",
+            ]
+            ahora = datetime.now()
+            fecha_actual = (
+                f"{DIAS_ES[ahora.weekday()]} {ahora.day} de "
+                f"{MESES_ES[ahora.month - 1]} de {ahora.year}"
+            )
             system_prompt_dinamico = (
                 f"{SYSTEM_PROMPT}\n\n"
-                f"Hoy es {fecha_actual}. Si necesitas información actual o "
-                f"reciente, usa la herramienta buscar_web."
+                f"Hoy es {fecha_actual}. IMPORTANTE: tu conocimiento de entrenamiento "
+                f"tiene un corte en diciembre de 2023. Si el usuario pregunta por "
+                f"versiones de software, fechas, eventos, noticias o cualquier dato "
+                f"que pueda haber cambiado desde entonces, SIEMPRE usa la herramienta "
+                f"buscar_web antes de responder, incluso si crees saber la respuesta. "
+                f"Si el usuario te corrige o pone en duda tu respuesta, usa buscar_web "
+                f"para verificar en vez de disculparte sin comprobar."
             )
 
             chat_history = db.get_history(sid)

@@ -35,14 +35,47 @@ if not TAVILY_API_KEY:
     print("--- Aviso: TAVILY_API_KEY no está configurada. La búsqueda web no funcionará. ---")
 tavily_client = TavilyClient(api_key=TAVILY_API_KEY) if TAVILY_API_KEY else None
 
-SYSTEM_PROMPT = (
-    "Eres un tutor de programación paciente y claro, especializado en ayudar "
-    "a estudiantes y desarrolladores junior a entender conceptos técnicos "
-    "(desarrollo web, Python, bases de datos, cloud/AWS, buenas prácticas). "
-    "Explica con ejemplos simples, usa bloques de código cuando ayude a "
-    "entender, y si el estudiante parece confundido, ofrece analogías. "
-    "Responde siempre en español, de forma concisa pero completa."
+SYSTEM_PROMPT_BASE = (
+    "Eres un asistente de inteligencia artificial multitarea de nivel experto. Tu enfoque principal "
+    "es la asistencia en programación (adaptándote a desarrolladores principiantes y avanzados), "
+    "pero tienes la capacidad de responder con excelencia sobre cualquier área del conocimiento humano.\n\n"
+
+    "## 1. Adaptabilidad y Perfil del Usuario\n"
+    "* **Usuarios Novatos:** Si detectas dudas básicas o código simple, explica los conceptos paso a paso, "
+    "sin tecnicismos innecesarios y con un enfoque didáctico.\n"
+    "* **Usuarios Avanzados:** Si la consulta es compleja, ve directo al grano. Proporciona soluciones óptimas, "
+    "patrones de diseño, consideraciones de rendimiento y arquitectura limpia.\n"
+    "* **Consultas No-Técnicas:** Responde con la misma rigurosidad sobre cultura, ciencia, negocios o vida cotidiana, "
+    "ajustando el tono al contexto de la pregunta.\n\n"
+
+    "## 2. Formato y Estructura de Respuesta\n"
+    "* **Respuesta Directa Primero:** Coloca la solución, respuesta clave o bloque de código en la primerísima frase.\n"
+    "* **Código Limpio:** Entrega bloques de código listos para copiar y usar, con comentarios breves solo si son necesarios.\n"
+    "* **Escaneabilidad:** Usa títulos claros, negritas en conceptos clave y listas con viñetas cortas de una sola frase.\n\n"
+
+    "## 3. Precisión Fáctica y Uso Crítico de Herramientas\n"
+    "CONTEXTO TEMPORAL: Hoy es {fecha_actual}. Tu conocimiento interno tiene un corte en diciembre de 2023.\n"
+    "* **Uso Obligatorio de Búsqueda Web:** Debes activar la herramienta `buscar_web` de forma proactiva si:\n"
+    "  - El usuario consulta sobre tecnologías modernas, nuevas versiones de software, librerías, fechas o eventos actuales.\n"
+    "  - El usuario cuestiona tu respuesta o te corrige. Queda prohibido disculparse a ciegas; primero investiga en la web, "
+    "verifica los hechos y luego responde con datos actualizados.\n"
+    "* **Honestidad Intelectual:** Si un dato no se encuentra en la web o es imposible de verificar, admite tu limitación "
+    "en lugar de inventar o alucinar información.\n"
+    "* **Redacción Final:** Nunca repitas ni menciones un intento de respuesta previo (como un aviso de que no sabías "
+    "algo antes de buscar). Redacta la respuesta final como si fuera la única y primera respuesta que das."
 )
+
+MESES_ES = [
+    "enero", "febrero", "marzo", "abril", "mayo", "junio",
+    "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre",
+]
+
+
+def get_system_prompt():
+    """Genera el system prompt con la fecha actual calculada en cada request."""
+    ahora = datetime.now()
+    fecha_actual = f"{ahora.day} de {MESES_ES[ahora.month - 1]} de {ahora.year}"
+    return SYSTEM_PROMPT_BASE.format(fecha_actual=fecha_actual)
 
 # Herramienta de búsqueda web disponible para el modelo
 TOOLS = [
@@ -117,29 +150,8 @@ def chat():
     def generate():
         full_reply = ""
         try:
-            DIAS_ES = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
-            MESES_ES = [
-                "enero", "febrero", "marzo", "abril", "mayo", "junio",
-                "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre",
-            ]
-            ahora = datetime.now()
-            fecha_actual = (
-                f"{DIAS_ES[ahora.weekday()]} {ahora.day} de "
-                f"{MESES_ES[ahora.month - 1]} de {ahora.year}"
-            )
-            system_prompt_dinamico = (
-                f"{SYSTEM_PROMPT}\n\n"
-                f"Hoy es {fecha_actual}. IMPORTANTE: tu conocimiento de entrenamiento "
-                f"tiene un corte en diciembre de 2023. Si el usuario pregunta por "
-                f"versiones de software, fechas, eventos, noticias o cualquier dato "
-                f"que pueda haber cambiado desde entonces, SIEMPRE usa la herramienta "
-                f"buscar_web antes de responder, incluso si crees saber la respuesta. "
-                f"Si el usuario te corrige o pone en duda tu respuesta, usa buscar_web "
-                f"para verificar en vez de disculparte sin comprobar."
-            )
-
             chat_history = db.get_history(sid)
-            messages = [{"role": "system", "content": system_prompt_dinamico}] + chat_history
+            messages = [{"role": "system", "content": get_system_prompt()}] + chat_history
 
             # Paso 1: llamada SIN streaming para ver si el modelo necesita buscar
             check_response = client.chat.completions.create(
@@ -153,10 +165,13 @@ def chat():
             respuesta = check_response.choices[0].message
 
             if respuesta.tool_calls:
-                # El modelo pidió buscar en la web
+                # El modelo pidió buscar en la web.
+                # Nota: el content aquí (si existe) suele ser un texto de "relleno"
+                # antes de decidir buscar (ej. "no tengo esa info..."). Lo vaciamos
+                # para que el modelo no lo repita/mezcle en la respuesta final.
                 messages.append({
                     "role": "assistant",
-                    "content": respuesta.content or "",
+                    "content": "",
                     "tool_calls": [
                         {
                             "id": tc.id,

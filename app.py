@@ -131,7 +131,21 @@ def chat():
 
             if respuesta.tool_calls:
                 # El modelo pidió buscar en la web
-                messages.append(respuesta)
+                messages.append({
+                    "role": "assistant",
+                    "content": respuesta.content or "",
+                    "tool_calls": [
+                        {
+                            "id": tc.id,
+                            "type": "function",
+                            "function": {
+                                "name": tc.function.name,
+                                "arguments": tc.function.arguments,
+                            },
+                        }
+                        for tc in respuesta.tool_calls
+                    ],
+                })
 
                 for tool_call in respuesta.tool_calls:
                     if tool_call.function.name == "buscar_web":

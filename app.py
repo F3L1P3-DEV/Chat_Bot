@@ -11,12 +11,15 @@ import os
 import json
 import uuid
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from flask import Flask, request, jsonify, render_template, Response, stream_with_context, session, abort
 from groq import Groq
 from tavily import TavilyClient
 from dotenv import load_dotenv
 
 import db
+
+COLOMBIA_TZ = ZoneInfo("America/Bogota")
 
 load_dotenv()
 
@@ -55,10 +58,17 @@ SYSTEM_PROMPT_BASE = (
 
     "## 3. Precisión Fáctica y Uso Crítico de Herramientas\n"
     "CONTEXTO TEMPORAL: Hoy es {fecha_actual}. Tu conocimiento interno tiene un corte en diciembre de 2023.\n"
-    "* **Uso Obligatorio de Búsqueda Web:** Debes activar la herramienta `buscar_web` de forma proactiva si:\n"
-    "  - El usuario consulta sobre tecnologías modernas, nuevas versiones de software, librerías, fechas o eventos actuales.\n"
-    "  - El usuario cuestiona tu respuesta o te corrige. Queda prohibido disculparse a ciegas; primero investiga en la web, "
-    "verifica los hechos y luego responde con datos actualizados.\n"
+    "* **Uso Obligatorio de Búsqueda Web:** Debes activar la herramienta `buscar_web` de forma proactiva "
+    "SIEMPRE (sin excepción, sin importar qué tan seguro te sientas) si el usuario pregunta por:\n"
+    "  - La versión más reciente/actual de CUALQUIER lenguaje de programación, framework, librería o "
+    "herramienta (Python, JavaScript, Node, React, Django, etc.). Nunca respondas un número de versión "
+    "de memoria: siempre búscalo primero, incluso si crees conocerlo con certeza.\n"
+    "  - Fechas, noticias o eventos actuales.\n"
+    "  - Cualquier dato que pueda haber cambiado desde diciembre de 2023.\n"
+    "* **Ante cualquier duda o corrección del usuario** (ej. '¿seguro?', 'no es así', 'está mal'), "
+    "queda PROHIBIDO repetir la misma respuesta o reafirmarte sin evidencia nueva. Debes usar "
+    "buscar_web para verificar antes de responder de nuevo, incluso si ya buscaste antes en la "
+    "conversación.\n"
     "* **Honestidad Intelectual:** Si un dato no se encuentra en la web o es imposible de verificar, admite tu limitación "
     "en lugar de inventar o alucinar información.\n"
     "* **Redacción Final:** Nunca repitas ni menciones un intento de respuesta previo (como un aviso de que no sabías "
@@ -72,8 +82,8 @@ MESES_ES = [
 
 
 def get_system_prompt():
-    """Genera el system prompt con la fecha actual calculada en cada request."""
-    ahora = datetime.now()
+    """Genera el system prompt con la fecha actual (hora de Colombia) calculada en cada request."""
+    ahora = datetime.now(COLOMBIA_TZ)
     fecha_actual = f"{ahora.day} de {MESES_ES[ahora.month - 1]} de {ahora.year}"
     return SYSTEM_PROMPT_BASE.format(fecha_actual=fecha_actual)
 
@@ -130,8 +140,39 @@ def home():
     return render_template("index.html")
 
 
-@app.route("/history", methods=["GET"])
-def history():
+def requiere_busqueda_forzada(mensaje: str) -> bool:
+    """
+    Detecta si el mensaje del usuario probablemente pide un dato que cambia
+    con el tiempo (versión más reciente de algo técnico, actualizaciones, etc.)
+    Si es así, forzamos tool_choice='required' en vez de confiar en el
+    criterio del modelo, que a veces falla con temas donde se siente "seguro"
+    (como Python) aunque el prompt le pida verificar.
+    """
+    mensaje = mensaje.lower()
+
+    disparadores_version = [
+        "última versión", "ultima version", "versión más reciente",
+        "version mas reciente", "versión actual", "version actual",
+        "nueva versión", "nueva version", "se actualizó", "se actualizo",
+        "actualización", "actualizacion", "qué versión", "que version",
+    ]
+
+    # Temas típicos de un bot de programación donde este chequeo aplica
+    temas_tecnicos = [
+        "python", "javascript", "java", "node", "node.js", "react", "vue",
+        "angular", "django", "flask", "next.js", "nextjs", "typescript",
+        "php", "laravel", "ruby", "rails", "go", "golang", "rust", "c#",
+        ".net", "docker", "kubernetes", "postgres", "postgresql", "mysql",
+        "mongodb", "npm", "pip", "git", "github", "vscode", "visual studio",
+    ]
+
+    tiene_disparador = any(d in mensaje for d in disparadores_version)
+    tiene_tema_tecnico = any(t in mensaje for t in temas_tecnicos)
+
+    return tiene_disparador and tiene_tema_tecnico
+
+
+
     sid = get_session_id()
     return jsonify({"messages": db.get_history(sid)})
 
@@ -153,13 +194,19 @@ def chat():
             chat_history = db.get_history(sid)
             messages = [{"role": "system", "content": get_system_prompt()}] + chat_history
 
+            # Si detectamos que la pregunta pide una versión/dato actual de
+            # algo técnico, forzamos la búsqueda en vez de dejarlo a criterio
+            # del modelo (evita casos como "Python 3.11" respondido de memoria).
+            forzar_busqueda = requiere_busqueda_forzada(user_message)
+            tool_choice = "required" if forzar_busqueda else "auto"
+
             # Paso 1: llamada SIN streaming para ver si el modelo necesita buscar
             check_response = client.chat.completions.create(
                 model="llama-3.3-70b-versatile",
                 max_tokens=1024,
                 messages=messages,
                 tools=TOOLS,
-                tool_choice="auto",
+                tool_choice=tool_choice,
             )
 
             respuesta = check_response.choices[0].message

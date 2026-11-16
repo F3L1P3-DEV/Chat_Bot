@@ -12,9 +12,37 @@ function addMessage(text, sender) {
   return msg;
 }
 
+/**
+ * Interpreta un bloque SSE ("event: ...\ndata: ...").
+ * El backend serializa cada payload como JSON, por lo que los saltos de
+ * línea y el código llegan intactos.
+ */
+function parseSSEBlock(block) {
+  let eventType = "message";
+  const dataLines = [];
+
+  for (const line of block.split("\n")) {
+    if (line.startsWith("event:")) {
+      eventType = line.slice(6).trim();
+    } else if (line.startsWith("data:")) {
+      dataLines.push(line.slice(5).replace(/^ /, ""));
+    }
+  }
+
+  const raw = dataLines.join("\n");
+  let data;
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    data = raw; // respaldo: texto plano
+  }
+  return { eventType, data };
+}
+
 async function sendMessage() {
   const text = userInput.value.trim();
-  if (!text) return;
+  // Evita envíos duplicados (por ejemplo, con Enter mientras se espera la respuesta)
+  if (!text || sendBtn.disabled) return;
 
   addMessage(text, "user");
   userInput.value = "";
@@ -22,7 +50,7 @@ async function sendMessage() {
 
   // Div vacío que se va llenando con cada trozo de texto que llega
   const botMsg = addMessage("", "bot");
-  botMsg.classList.add("typing-cursor"); // opcional: estilo de "cursor" mientras escribe
+  botMsg.classList.add("typing-cursor");
   let fullText = "";
   let gotAnyContent = false;
 
@@ -34,7 +62,12 @@ async function sendMessage() {
     });
 
     if (!response.ok || !response.body) {
-      throw new Error("Respuesta no válida del servidor");
+      let detail = "Respuesta no válida del servidor";
+      try {
+        const err = await response.json();
+        if (err.error) detail = err.error;
+      } catch { /* la respuesta no era JSON */ }
+      throw new Error(detail);
     }
 
     const reader = response.body.getReader();
@@ -47,36 +80,23 @@ async function sendMessage() {
 
       buffer += decoder.decode(value, { stream: true });
 
-      // Los eventos SSE vienen separados por línea vacía ("\n\n")
+      // Los eventos SSE vienen separados por una línea vacía ("\n\n")
       const parts = buffer.split("\n\n");
       buffer = parts.pop(); // guarda el fragmento incompleto para la próxima iteración
 
       for (const part of parts) {
-        const lines = part.split("\n");
-        let eventType = "message";
-        let eventData = "";
-
-        for (const line of lines) {
-          if (line.startsWith("event: ")) {
-            eventType = line.slice(7).trim();
-          } else if (line.startsWith("data: ")) {
-            eventData = line.slice(6);
-          }
-        }
+        if (!part.trim()) continue;
+        const { eventType, data } = parseSSEBlock(part);
 
         if (eventType === "error") {
-          botMsg.textContent = "⚠️ " + eventData;
-          botMsg.classList.remove("typing-cursor");
+          botMsg.textContent = "⚠️ " + data;
           reader.cancel();
           return;
         }
 
-        if (eventType === "done") {
-          continue; // fin normal del stream
-        }
+        if (eventType === "done") continue; // fin normal del stream
 
-        // Restaura los saltos de línea que escapamos en el backend
-        fullText += eventData.replace(/\\n/g, "\n");
+        fullText += data;
         gotAnyContent = true;
         botMsg.textContent = fullText;
         chatWindow.scrollTop = chatWindow.scrollHeight;
@@ -87,7 +107,7 @@ async function sendMessage() {
       botMsg.textContent = "⚠️ No se recibió respuesta del servidor.";
     }
   } catch (err) {
-    botMsg.textContent = "⚠️ No se pudo conectar con el servidor.";
+    botMsg.textContent = "⚠️ " + (err.message || "No se pudo conectar con el servidor.");
   } finally {
     botMsg.classList.remove("typing-cursor");
     sendBtn.disabled = false;
@@ -95,17 +115,11 @@ async function sendMessage() {
   }
 }
 
-// Carga el historial tan pronto como el DOM esté listo
-document.addEventListener("DOMContentLoaded", () => {
-  loadHistory();
-});
-
 async function loadHistory() {
   try {
     const response = await fetch("/history");
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
-
-    console.log("Historial recibido desde el servidor:", data);
 
     if (data.messages && data.messages.length > 0) {
       chatWindow.innerHTML = ""; // Limpia el saludo estático
@@ -118,15 +132,24 @@ async function loadHistory() {
   }
 }
 
+// Carga el historial tan pronto como el DOM esté listo
+document.addEventListener("DOMContentLoaded", loadHistory);
+
 // Escuchadores de eventos para enviar mensaje y resetear
 sendBtn.addEventListener("click", sendMessage);
 
 userInput.addEventListener("keydown", (e) => {
-  if (e.key === "Enter") sendMessage();
+  // isComposing evita enviar al confirmar texto con teclados IME
+  if (e.key === "Enter" && !e.isComposing) sendMessage();
 });
 
 resetBtn.addEventListener("click", async () => {
-  await fetch("/reset", { method: "POST" });
-  chatWindow.innerHTML = "";
-  addMessage("Conversación reiniciada. ¿En qué te ayudo?", "bot");
+  try {
+    const response = await fetch("/reset", { method: "POST" });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    chatWindow.innerHTML = "";
+    addMessage("Conversación reiniciada. ¿En qué te ayudo?", "bot");
+  } catch (err) {
+    addMessage("⚠️ No se pudo reiniciar la conversación.", "bot");
+  }
 });

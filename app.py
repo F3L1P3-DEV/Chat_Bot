@@ -10,32 +10,61 @@ información actual.
 import os
 import json
 import uuid
+import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from flask import Flask, request, jsonify, render_template, Response, stream_with_context, session, abort
+
+from dotenv import load_dotenv
+
+# IMPORTANTE: cargar el .env ANTES de importar `db`, porque db.py lee
+# DATABASE_URL al momento de importarse.
+load_dotenv()
+
+from flask import Flask, request, jsonify, render_template, Response, stream_with_context, session
 from groq import Groq
 from tavily import TavilyClient
-from dotenv import load_dotenv
 
 import db
 
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+logger = logging.getLogger("chatbot")
+
 COLOMBIA_TZ = ZoneInfo("America/Bogota")
 
-load_dotenv()
+# ---------------------------------------------------------------------------
+# Configuración
+# ---------------------------------------------------------------------------
+GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
+MAX_HISTORY_MESSAGES = 20      # mensajes previos que se envían al modelo
+MAX_MESSAGE_CHARS = 4000       # longitud máxima de un mensaje del usuario
+MAX_TOOL_RESULT_CHARS = 6000   # tope del resultado de búsqueda enviado al modelo
+
+SECRET_KEY = os.environ.get("SECRET_KEY")
+if not SECRET_KEY:
+    raise RuntimeError("Falta la variable de entorno SECRET_KEY.")
+
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
+if not GROQ_API_KEY:
+    raise RuntimeError("Falta la variable de entorno GROQ_API_KEY.")
 
 app = Flask(__name__)
-
-app.secret_key = os.environ.get("SECRET_KEY", "cambia-esto-en-produccion")
+app.secret_key = SECRET_KEY
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    # En producción (HTTPS) define COOKIE_SECURE=1
+    SESSION_COOKIE_SECURE=os.environ.get("COOKIE_SECURE", "0") == "1",
+)
 
 # Inicializa las tablas en la base de datos
 db.init_db()
 
 # Clientes de Groq y Tavily
-client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
+client = Groq(api_key=GROQ_API_KEY)
 
 TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY")
 if not TAVILY_API_KEY:
-    print("--- Aviso: TAVILY_API_KEY no está configurada. La búsqueda web no funcionará. ---")
+    logger.warning("TAVILY_API_KEY no está configurada. La búsqueda web no funcionará.")
 tavily_client = TavilyClient(api_key=TAVILY_API_KEY) if TAVILY_API_KEY else None
 
 SYSTEM_PROMPT_BASE = (
@@ -92,6 +121,7 @@ def get_system_prompt():
     fecha_actual = f"{ahora.day} de {MESES_ES[ahora.month - 1]} de {ahora.year}"
     return SYSTEM_PROMPT_BASE.format(fecha_actual=fecha_actual)
 
+
 # Herramienta de búsqueda web disponible para el modelo
 TOOLS = [
     {
@@ -123,26 +153,10 @@ def buscar_web(query):
     if not tavily_client:
         return {"error": "La búsqueda web no está disponible en este momento."}
     try:
-        resultado = tavily_client.search(query=query, max_results=3)
-        return resultado
-    except Exception as e:
-        return {"error": f"No se pudo completar la búsqueda: {e}"}
-
-
-def get_session_id():
-    """Obtiene el session_id de la cookie de Flask, o crea uno nuevo."""
-    session.permanent = True  # Mantiene la cookie activa al recargar la página
-    if "session_id" not in session:
-        session["session_id"] = str(uuid.uuid4())
-    sid = session["session_id"]
-    db.ensure_session(sid)
-    return sid
-
-
-@app.route("/")
-def home():
-    get_session_id()
-    return render_template("index.html")
+        return tavily_client.search(query=query, max_results=3)
+    except Exception:
+        logger.exception("Fallo en la búsqueda con Tavily")
+        return {"error": "No se pudo completar la búsqueda."}
 
 
 def requiere_busqueda_forzada(mensaje: str) -> bool:
@@ -177,50 +191,103 @@ def requiere_busqueda_forzada(mensaje: str) -> bool:
     return tiene_disparador and tiene_tema_tecnico
 
 
+def get_session_id():
+    """Obtiene el session_id de la cookie de Flask, o crea uno nuevo."""
+    session.permanent = True  # Mantiene la cookie activa al recargar la página
+    if "session_id" not in session:
+        session["session_id"] = str(uuid.uuid4())
+    sid = session["session_id"]
+    db.ensure_session(sid)
+    return sid
 
-    sid = get_session_id()
-    return jsonify({"messages": db.get_history(sid)})
+
+def sse(data, event=None):
+    """
+    Formatea un evento SSE. El payload siempre se serializa como JSON, de modo
+    que los saltos de línea y caracteres especiales (incluido el código) viajan
+    sin ambigüedad y sin necesidad de escapes manuales.
+    """
+    prefix = f"event: {event}\n" if event else ""
+    return f"{prefix}data: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+# ---------------------------------------------------------------------------
+# Rutas
+# ---------------------------------------------------------------------------
+@app.route("/")
+def home():
+    try:
+        get_session_id()
+    except Exception:
+        logger.exception("No se pudo registrar la sesión al cargar la página")
+    return render_template("index.html")
+
+
+@app.route("/health")
+def health():
+    return jsonify({"status": "ok"})
+
+
+@app.route("/history")
+def history():
+    try:
+        sid = get_session_id()
+        return jsonify({"messages": db.get_history(sid, limit=200)})
+    except Exception:
+        logger.exception("No se pudo obtener el historial")
+        return jsonify({"messages": [], "error": "No se pudo cargar el historial."}), 500
 
 
 @app.route("/chat", methods=["POST"])
 def chat():
-    sid = get_session_id()
-    data = request.get_json()
-    user_message = data.get("message", "").strip()
+    data = request.get_json(silent=True) or {}
+    user_message = (data.get("message") or "").strip()
 
     if not user_message:
         return jsonify({"error": "Mensaje vacío"}), 400
+    if len(user_message) > MAX_MESSAGE_CHARS:
+        return jsonify({"error": f"El mensaje supera los {MAX_MESSAGE_CHARS} caracteres."}), 400
 
-    db.add_message(sid, "user", user_message)
+    try:
+        sid = get_session_id()
+    except Exception:
+        logger.exception("No se pudo registrar la sesión")
+        return jsonify({"error": "Error interno del servidor."}), 500
 
     def generate():
         full_reply = ""
         try:
-            chat_history = db.get_history(sid)
-            messages = [{"role": "system", "content": get_system_prompt()}] + chat_history
+            # Solo los últimos N mensajes, para no exceder el límite de tokens.
+            chat_history = db.get_history(sid, limit=MAX_HISTORY_MESSAGES)
+            # El historial recortado debe comenzar con un mensaje del usuario.
+            while chat_history and chat_history[0]["role"] != "user":
+                chat_history.pop(0)
 
-            # Si detectamos que la pregunta pide una versión/dato actual de
-            # algo técnico, forzamos la búsqueda en vez de dejarlo a criterio
-            # del modelo (evita casos como "Python 3.11" respondido de memoria).
-            forzar_busqueda = requiere_busqueda_forzada(user_message)
-            tool_choice = "required" if forzar_busqueda else "auto"
+            # El mensaje actual se añade solo en memoria: se guarda en la BD
+            # junto con la respuesta, únicamente si todo sale bien.
+            messages = (
+                [{"role": "system", "content": get_system_prompt()}]
+                + chat_history
+                + [{"role": "user", "content": user_message}]
+            )
+
+            # Si la pregunta pide una versión/dato actual de algo técnico,
+            # forzamos la búsqueda en vez de dejarlo a criterio del modelo.
+            tool_choice = "required" if requiere_busqueda_forzada(user_message) else "auto"
 
             # Paso 1: llamada SIN streaming para ver si el modelo necesita buscar
             check_response = client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
+                model=GROQ_MODEL,
                 max_tokens=1024,
                 messages=messages,
                 tools=TOOLS,
                 tool_choice=tool_choice,
             )
-
             respuesta = check_response.choices[0].message
 
             if respuesta.tool_calls:
-                # El modelo pidió buscar en la web.
-                # Nota: el content aquí (si existe) suele ser un texto de "relleno"
-                # antes de decidir buscar (ej. "no tengo esa info..."). Lo vaciamos
-                # para que el modelo no lo repita/mezcle en la respuesta final.
+                # El content previo a una tool call suele ser texto de "relleno";
+                # lo vaciamos para que no se mezcle con la respuesta final.
                 messages.append({
                     "role": "assistant",
                     "content": "",
@@ -237,37 +304,53 @@ def chat():
                     ],
                 })
 
+                # Cada tool_call debe recibir una respuesta, aunque falle.
                 for tool_call in respuesta.tool_calls:
                     if tool_call.function.name == "buscar_web":
-                        args = json.loads(tool_call.function.arguments)
-                        resultado_busqueda = buscar_web(args["query"])
+                        try:
+                            query = json.loads(tool_call.function.arguments)["query"]
+                        except (json.JSONDecodeError, KeyError, TypeError):
+                            resultado = {"error": "Argumentos de búsqueda inválidos."}
+                        else:
+                            resultado = buscar_web(query)
+                    else:
+                        resultado = {"error": "Herramienta desconocida."}
 
-                        messages.append({
-                            "role": "tool",
-                            "tool_call_id": tool_call.id,
-                            "content": str(resultado_busqueda),
-                        })
+                    contenido = json.dumps(resultado, ensure_ascii=False, default=str)
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call.id,
+                        "content": contenido[:MAX_TOOL_RESULT_CHARS],
+                    })
 
             # Paso 2: respuesta final, esta vez SÍ en streaming
             stream = client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
+                model=GROQ_MODEL,
                 max_tokens=1024,
                 messages=messages,
                 stream=True,
             )
 
             for chunk in stream:
+                if not chunk.choices:
+                    continue
                 content = chunk.choices[0].delta.content
                 if content:
                     full_reply += content
-                    safe_content = content.replace("\n", "\\n")
-                    yield f"data: {safe_content}\n\n"
+                    yield sse(content)
 
-            db.add_message(sid, "assistant", full_reply)
-            yield "event: done\ndata: end\n\n"
+            if not full_reply.strip():
+                raise RuntimeError("El modelo devolvió una respuesta vacía.")
 
-        except Exception as e:
-            yield f"event: error\ndata: {str(e)}\n\n"
+            # Se guarda el intercambio completo en una sola transacción.
+            db.add_exchange(sid, user_message, full_reply)
+            yield sse("end", event="done")
+
+        except Exception:
+            # El detalle queda en los logs del servidor; al cliente solo un mensaje genérico.
+            logger.exception("Error durante /chat")
+            yield sse("Ocurrió un error al procesar tu mensaje. Inténtalo de nuevo en unos instantes.",
+                      event="error")
 
     return Response(
         stream_with_context(generate()),
@@ -282,15 +365,18 @@ def chat():
 @app.route("/reset", methods=["POST"])
 def reset():
     """Limpia el historial de la sesión activa."""
-    sid = get_session_id()
-    db.clear_history(sid)
-    return jsonify({"status": "ok"})
-
-
-@app.route("/admin/download-db", methods=["GET"])
-def download_db():
-    return jsonify({"info": "La base de datos está gestionada en Supabase."}), 200
+    try:
+        sid = get_session_id()
+        db.clear_history(sid)
+        return jsonify({"status": "ok"})
+    except Exception:
+        logger.exception("No se pudo reiniciar la conversación")
+        return jsonify({"status": "error"}), 500
 
 
 if __name__ == "__main__":
-    app.run(debug=True, port=5000, threaded=True)
+    app.run(
+        debug=os.environ.get("FLASK_DEBUG", "0") == "1",
+        port=int(os.environ.get("PORT", 5000)),
+        threaded=True,
+    )

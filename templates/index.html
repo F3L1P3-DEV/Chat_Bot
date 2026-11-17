@@ -4,8 +4,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Chat Bot</title>
-  <link rel="icon" href="/Chat_Bot-main/static/images/principal.png" type="image/png"/>
-  <link rel="stylesheet" href="/Chat_Bot-main/static/style.css"/>
+  <link rel="icon" href="{{ url_for('static', filename='images/principal.png') }}" type="image/png"/>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}"/>
 </head>
 <body>
 
@@ -32,6 +32,6 @@
     </div>
   </div>
 
-  <script src="/Chat_Bot-main/static/script.js"></script>
+  <script src="{{ url_for('static', filename='script.js') }}"></script>
 </body>
 </html>

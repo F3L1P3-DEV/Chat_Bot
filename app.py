@@ -92,8 +92,11 @@ SYSTEM_PROMPT_BASE = (
     "  - La versión más reciente/actual de CUALQUIER lenguaje de programación, framework, librería o "
     "herramienta (Python, JavaScript, Node, React, Django, etc.). Nunca respondas un número de versión "
     "de memoria: siempre búscalo primero, incluso si crees conocerlo con certeza.\n"
-    "  - Fechas, noticias o eventos actuales.\n"
+    "  - Noticias o eventos actuales.\n"
     "  - Cualquier dato que pueda haber cambiado desde diciembre de 2023.\n"
+    "* **Fecha y día de hoy:** Si el usuario pregunta qué fecha o qué día es hoy, responde directamente "
+    "con {fecha_actual} (hora de Colombia) y NO uses buscar_web. Los resultados de búsqueda pueden "
+    "usar otra zona horaria y dar un día distinto.\n"
     "* **Ante cualquier duda o corrección del usuario** (ej. '¿seguro?', 'no es así', 'está mal'), "
     "queda PROHIBIDO repetir la misma respuesta o reafirmarte sin evidencia nueva. Debes usar "
     "buscar_web para verificar antes de responder de nuevo, incluso si ya buscaste antes en la "
@@ -112,13 +115,19 @@ SYSTEM_PROMPT_BASE = (
 MESES_ES = [
     "enero", "febrero", "marzo", "abril", "mayo", "junio",
     "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre",
+    
 ]
 
+
+DIAS_ES = [
+    "lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"
+
+]
 
 def get_system_prompt():
     """Genera el system prompt con la fecha actual (hora de Colombia) calculada en cada request."""
     ahora = datetime.now(COLOMBIA_TZ)
-    fecha_actual = f"{ahora.day} de {MESES_ES[ahora.month - 1]} de {ahora.year}"
+    fecha_actual = f"{DIAS_ES[ahora.weekday()]} {ahora.day} de {MESES_ES[ahora.month - 1]} de {ahora.year}"
     return SYSTEM_PROMPT_BASE.format(fecha_actual=fecha_actual)
 
 

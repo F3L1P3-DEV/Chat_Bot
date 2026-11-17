@@ -339,7 +339,7 @@ def stream_modelo(messages, estado, tools=False, tool_choice="auto"):
 
         if delta.content:
             estado["text"] += delta.content
-            yield delta.content
+            yield sse(delta.content)
 
         for tc in (delta.tool_calls or []):
             slot = acumuladas.setdefault(tc.index, {"id": "", "name": "", "arguments": ""})

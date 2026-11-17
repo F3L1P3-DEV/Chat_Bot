@@ -73,7 +73,14 @@ def init_db():
                 CREATE INDEX IF NOT EXISTS idx_messages_session_id
                 ON messages (session_id, id);
             """)
+
+            # Permite archivar mensajes en lugar de borrarlos
+            cursor.execute("""
+                ALTER TABLE messages
+                ADD COLUMN IF NOT EXISTS archived BOOLEAN NOT NULL DEFAULT FALSE;
+            """)
         logger.info("Base de datos PostgreSQL conectada e inicializada con éxito.")
+        
     except Exception:
         logger.exception("No se pudo inicializar la base de datos")
 
@@ -123,7 +130,7 @@ def get_history(session_id: str, limit: int | None = None):
     query = """
         SELECT role, content
         FROM messages
-        WHERE session_id = %s
+        WHERE session_id = %s AND archived = FALSE
         ORDER BY id DESC
     """
     params = [session_id]
@@ -140,6 +147,10 @@ def get_history(session_id: str, limit: int | None = None):
 
 
 def clear_history(session_id: str):
-    """Elimina el historial de mensajes de la sesión activa."""
+    """Archiva el historial de la sesión (no lo elimina)."""
     with get_cursor() as cursor:
-        cursor.execute("DELETE FROM messages WHERE session_id = %s;", (session_id,))
+        cursor.execute("""
+            UPDATE messages
+            SET archived = TRUE
+            WHERE session_id = %s AND archived = FALSE;
+        """, (session_id,))
